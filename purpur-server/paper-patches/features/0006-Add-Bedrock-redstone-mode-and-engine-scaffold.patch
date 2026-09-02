@@ -1,0 +1,251 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: GrimstoneMC <GDiMarca86@gmail.com>
+Date: Wed, 2 Sep 2026 00:45:00 -0400
+Subject: [PATCH] Add Bedrock redstone mode and engine scaffold
+
+Grimstone's Bedrock redstone implementation is a fourth Paper redstone
+mode. The engine keeps persistent per-circuit state rather than treating
+Bedrock's producer/consumer behavior as a global odd/even tick switch.
+
+This first layer establishes the persistent graph and queues and owns wire
+recalculation roots. Component-specific producer/consumer handlers are added
+in follow-up patches.
+
+diff --git a/src/main/java/io/papermc/paper/configuration/WorldConfiguration.java b/src/main/java/io/papermc/paper/configuration/WorldConfiguration.java
+--- a/src/main/java/io/papermc/paper/configuration/WorldConfiguration.java
++++ b/src/main/java/io/papermc/paper/configuration/WorldConfiguration.java
+@@ -586,9 +586,9 @@ public class WorldConfiguration extends ConfigurationPart {
+         public boolean legacyEnderPearlBehavior = false;
+         public boolean allowRemoteEnderDragonRespawning = false;
+ 
+         public enum RedstoneImplementation {
+-            VANILLA, EIGENCRAFT, ALTERNATE_CURRENT
++            VANILLA, EIGENCRAFT, ALTERNATE_CURRENT, BEDROCK
+         }
+ 
+         public enum AlternateCurrentUpdateOrder {
+diff --git a/src/main/java/org/grimstonemc/grimstone/redstone/BedrockRedstoneEngine.java b/src/main/java/org/grimstonemc/grimstone/redstone/BedrockRedstoneEngine.java
+new file mode 100644
+--- /dev/null
++++ b/src/main/java/org/grimstonemc/grimstone/redstone/BedrockRedstoneEngine.java
+@@ -0,0 +1,201 @@
++package org.grimstonemc.grimstone.redstone;
++
++import java.util.Iterator;
++import java.util.LinkedHashMap;
++import java.util.LinkedHashSet;
++import java.util.Map;
++import java.util.Set;
++import net.minecraft.core.BlockPos;
++import net.minecraft.server.level.ServerLevel;
++import net.minecraft.world.level.block.Blocks;
++import net.minecraft.world.level.block.RedStoneWireBlock;
++import net.minecraft.world.level.block.state.BlockState;
++import net.minecraft.world.level.redstone.Orientation;
++
++/**
++ * Grimstone's Bedrock redstone execution state for one {@link ServerLevel}.
++ *
++ * <p>This is intentionally a persistent circuit model. Bedrock producer and
++ * consumer behavior is not represented as a global even/odd game-tick switch.
++ * Nodes retain old/current/next signal state, dependency information, and
++ * half-pulse state across updates so component scheduling can reproduce Bedrock
++ * semantics without leaking Java's neighbor-update ordering into the model.</p>
++ */
++public final class BedrockRedstoneEngine {
++
++    private final ServerLevel level;
++
++    /*
++     * Linked collections are deliberate here. Until the Bedrock directional
++     * priority tables are fully wired for every component, insertion order gives
++     * us stable, inspectable execution instead of hash-order randomness.
++     */
++    private final Map<Long, NodeState> nodes = new LinkedHashMap<>();
++    private final Set<Long> pendingWireUpdates = new LinkedHashSet<>();
++    private final Set<Long> pendingProducers = new LinkedHashSet<>();
++    private final Set<Long> pendingConsumers = new LinkedHashSet<>();
++
++    private boolean drainingWireUpdates;
++
++    public BedrockRedstoneEngine(final ServerLevel level) {
++        this.level = level;
++    }
++
++    /**
++     * Called when a redstone wire enters the circuit graph.
++     */
++    public void onWireAdded(final RedStoneWireBlock wireBlock, final BlockPos pos, final BlockState state) {
++        final NodeState node = this.trackWire(pos, state);
++        node.removed = false;
++        this.queueWire(node);
++        this.drainWireUpdates(wireBlock);
++    }
++
++    /**
++     * Called before a redstone wire leaves the circuit graph.
++     */
++    public void onWireRemoved(final BlockPos pos, final BlockState state) {
++        final long key = pos.asLong();
++        final NodeState node = this.nodes.get(key);
++        if (node != null) {
++            node.oldPower = node.currentPower;
++            node.currentPower = getWirePower(state);
++            node.nextPower = 0;
++            node.removed = true;
++            node.halfPulsePending |= node.currentPower != 0;
++        }
++
++        this.pendingWireUpdates.remove(key);
++        this.pendingProducers.remove(key);
++        this.pendingConsumers.remove(key);
++        this.nodes.remove(key);
++    }
++
++    /**
++     * Called when a neighboring block causes a wire to be reconsidered.
++     */
++    public void onWireUpdated(
++        final RedStoneWireBlock wireBlock,
++        final BlockPos pos,
++        final BlockState state,
++        final Orientation orientation
++    ) {
++        final NodeState node = this.trackWire(pos, state);
++        node.removed = false;
++
++        if (orientation != null) {
++            final BlockPos source = pos.relative(orientation.getFront().getOpposite());
++            node.dependencies.add(source.asLong());
++        }
++
++        this.queueWire(node);
++        this.drainWireUpdates(wireBlock);
++    }
++
++    /**
++     * Queue a Bedrock producer/capacitor component for the producer pass.
++     *
++     * <p>The component handlers themselves are intentionally added separately;
++     * this queue is part of the execution model from the start so producers do
++     * not have to be retrofitted onto Java's neighbor scheduler later.</p>
++     */
++    public void queueProducer(final BlockPos pos) {
++        this.pendingProducers.add(pos.asLong());
++    }
++
++    /**
++     * Queue a Bedrock consumer for the consumer pass.
++     */
++    public void queueConsumer(final BlockPos pos) {
++        this.pendingConsumers.add(pos.asLong());
++    }
++
++    public int trackedNodeCount() {
++        return this.nodes.size();
++    }
++
++    public int pendingProducerCount() {
++        return this.pendingProducers.size();
++    }
++
++    public int pendingConsumerCount() {
++        return this.pendingConsumers.size();
++    }
++
++    private NodeState trackWire(final BlockPos pos, final BlockState state) {
++        final long key = pos.asLong();
++        final int power = getWirePower(state);
++        NodeState node = this.nodes.get(key);
++
++        if (node == null) {
++            node = new NodeState(pos.immutable(), power);
++            this.nodes.put(key, node);
++        } else {
++            node.oldPower = node.currentPower;
++            node.currentPower = power;
++            node.nextPower = power;
++        }
++
++        return node;
++    }
++
++    private void queueWire(final NodeState node) {
++        this.pendingWireUpdates.add(node.pos.asLong());
++    }
++
++    /**
++     * Initial wire execution bridge.
++     *
++     * <p>The queue, graph lifetime, and re-entrancy boundary are owned by
++     * Grimstone. Paper's target-strength calculator is temporarily reused for
++     * signal arithmetic while component-specific Bedrock evaluators are ported.
++     * Neighbor callbacks that occur during a calculation are folded back into
++     * this queue instead of recursively starting another Bedrock pass.</p>
++     */
++    private void drainWireUpdates(final RedStoneWireBlock wireBlock) {
++        if (this.drainingWireUpdates) {
++            return;
++        }
++
++        this.drainingWireUpdates = true;
++        try {
++            while (!this.pendingWireUpdates.isEmpty()) {
++                final long key = removeFirst(this.pendingWireUpdates);
++                final NodeState node = this.nodes.get(key);
++                if (node == null || node.removed) {
++                    continue;
++                }
++
++                final BlockState currentState = this.level.getBlockState(node.pos);
++                if (!currentState.is(Blocks.REDSTONE_WIRE)) {
++                    this.nodes.remove(key);
++                    continue;
++                }
++
++                final int before = getWirePower(currentState);
++                node.oldPower = node.currentPower;
++                node.currentPower = before;
++                node.nextPower = before;
++
++                final BlockState updatedState = wireBlock.calculateCurrentChanges(this.level, node.pos, currentState);
++                final int after = updatedState.is(Blocks.REDSTONE_WIRE) ? getWirePower(updatedState) : 0;
++
++                node.nextPower = after;
++                node.halfPulsePending |= node.oldPower == after && node.oldPower != before;
++                node.currentPower = after;
++            }
++        } finally {
++            this.drainingWireUpdates = false;
++        }
++    }
++
++    private static long removeFirst(final Set<Long> values) {
++        final Iterator<Long> iterator = values.iterator();
++        final long value = iterator.next();
++        iterator.remove();
++        return value;
++    }
++
++    private static int getWirePower(final BlockState state) {
++        return state.hasProperty(RedStoneWireBlock.POWER) ? state.getValue(RedStoneWireBlock.POWER) : 0;
++    }
++
++    private static final class NodeState {
++        private final BlockPos pos;
++        private final Set<Long> dependencies = new LinkedHashSet<>();
++
++        private int oldPower;
++        private int currentPower;
++        private int nextPower;
++        private boolean halfPulsePending;
++        private boolean removed;
++
++        private NodeState(final BlockPos pos, final int power) {
++            this.pos = pos;
++            this.oldPower = power;
++            this.currentPower = power;
++            this.nextPower = power;
++        }
++    }
++}
