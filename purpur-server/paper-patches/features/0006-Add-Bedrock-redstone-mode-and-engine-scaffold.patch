@@ -14,7 +14,7 @@ in follow-up patches.
 diff --git a/src/main/java/io/papermc/paper/configuration/WorldConfiguration.java b/src/main/java/io/papermc/paper/configuration/WorldConfiguration.java
 --- a/src/main/java/io/papermc/paper/configuration/WorldConfiguration.java
 +++ b/src/main/java/io/papermc/paper/configuration/WorldConfiguration.java
-@@ -586,9 +586,9 @@ public class WorldConfiguration extends ConfigurationPart {
+@@ -586,8 +586,8 @@ public class WorldConfiguration extends ConfigurationPart {
          public boolean legacyEnderPearlBehavior = false;
          public boolean allowRemoteEnderDragonRespawning = false;
  
@@ -28,7 +28,7 @@ diff --git a/src/main/java/org/grimstonemc/grimstone/redstone/BedrockRedstoneEng
 new file mode 100644
 --- /dev/null
 +++ b/src/main/java/org/grimstonemc/grimstone/redstone/BedrockRedstoneEngine.java
-@@ -0,0 +1,201 @@
+@@ -0,0 +1,220 @@
 +package org.grimstonemc.grimstone.redstone;
 +
 +import java.util.Iterator;
