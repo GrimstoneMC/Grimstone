@@ -29,7 +29,7 @@ diff --git a/net/minecraft/server/level/ServerLevel.java b/net/minecraft/server/
 diff --git a/net/minecraft/world/level/block/RedStoneWireBlock.java b/net/minecraft/world/level/block/RedStoneWireBlock.java
 --- a/net/minecraft/world/level/block/RedStoneWireBlock.java
 +++ b/net/minecraft/world/level/block/RedStoneWireBlock.java
-@@ -356,10 +356,13 @@ public class RedStoneWireBlock extends Block {
+@@ -356,9 +356,11 @@ public class RedStoneWireBlock extends Block {
              // Paper start - optimize redstone - replace call to updatePowerStrength
              if (level.paperConfig().misc.redstoneImplementation == io.papermc.paper.configuration.WorldConfiguration.Misc.RedstoneImplementation.ALTERNATE_CURRENT) {
                  level.getWireHandler().onWireAdded(pos, state); // Alternate Current
@@ -41,7 +41,7 @@ diff --git a/net/minecraft/world/level/block/RedStoneWireBlock.java b/net/minecr
              // Paper end - optimize redstone
  
              for (Direction direction : Direction.Plane.VERTICAL) {
-@@ -379,10 +382,13 @@ public class RedStoneWireBlock extends Block {
+@@ -379,8 +381,10 @@ public class RedStoneWireBlock extends Block {
              // Paper start - optimize redstone - replace call to updatePowerStrength
              if (level.paperConfig().misc.redstoneImplementation == io.papermc.paper.configuration.WorldConfiguration.Misc.RedstoneImplementation.ALTERNATE_CURRENT) {
                  level.getWireHandler().onWireRemoved(pos, state); // Alternate Current
@@ -52,7 +52,7 @@ diff --git a/net/minecraft/world/level/block/RedStoneWireBlock.java b/net/minecr
              }
              // Paper end - optimize redstone
              this.updateNeighborsOfNeighboringWires(level, pos);
-@@ -410,13 +416,17 @@ public class RedStoneWireBlock extends Block {
+@@ -410,19 +414,19 @@ public class RedStoneWireBlock extends Block {
          final BlockState state, final Level level, final BlockPos pos, final Block block, final @Nullable Orientation orientation, final boolean movedByPiston
      ) {
          if (!level.isClientSide()) {
