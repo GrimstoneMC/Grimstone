@@ -1,0 +1,79 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: GrimstoneMC <GDiMarca86@gmail.com>
+Date: Wed, 2 Sep 2026 00:55:00 -0400
+Subject: [PATCH] Route redstone wire updates through Bedrock engine
+
+diff --git a/net/minecraft/server/level/ServerLevel.java b/net/minecraft/server/level/ServerLevel.java
+--- a/net/minecraft/server/level/ServerLevel.java
++++ b/net/minecraft/server/level/ServerLevel.java
+@@ -237,6 +237,7 @@ public class ServerLevel extends Level implements WorldGenLevel, ServerEntityGet
+     private static final org.bukkit.craftbukkit.persistence.CraftPersistentDataTypeRegistry DATA_TYPE_REGISTRY = new org.bukkit.craftbukkit.persistence.CraftPersistentDataTypeRegistry();
+     public final org.bukkit.craftbukkit.persistence.CraftPersistentDataContainer persistentDataContainer = new org.bukkit.craftbukkit.persistence.CraftPersistentDataContainer(DATA_TYPE_REGISTRY);
+     private final alternate.current.wire.WireHandler wireHandler = new alternate.current.wire.WireHandler(this); // Paper - optimize redstone (Alternate Current)
++    private final org.grimstonemc.grimstone.redstone.BedrockRedstoneEngine bedrockRedstoneEngine = new org.grimstonemc.grimstone.redstone.BedrockRedstoneEngine(this); // Grimstone - Bedrock redstone
+     public boolean hasRidableMoveEvent = false; // Purpur - Ridables
+ 
+     @Override
+@@ -2784,6 +2785,11 @@ public class ServerLevel extends Level implements WorldGenLevel, ServerEntityGet
+     public alternate.current.wire.WireHandler getWireHandler() {
+         return wireHandler;
+     }
++
++    public org.grimstonemc.grimstone.redstone.BedrockRedstoneEngine getBedrockRedstoneEngine() {
++        return this.bedrockRedstoneEngine;
++    }
++
+     // Paper end - optimize redstone (Alternate Current)
+ 
+     public boolean isAllowedToEnterPortal(final Level toLevel) {
+diff --git a/net/minecraft/world/level/block/RedStoneWireBlock.java b/net/minecraft/world/level/block/RedStoneWireBlock.java
+--- a/net/minecraft/world/level/block/RedStoneWireBlock.java
++++ b/net/minecraft/world/level/block/RedStoneWireBlock.java
+@@ -356,10 +356,13 @@ public class RedStoneWireBlock extends Block {
+             // Paper start - optimize redstone - replace call to updatePowerStrength
+             if (level.paperConfig().misc.redstoneImplementation == io.papermc.paper.configuration.WorldConfiguration.Misc.RedstoneImplementation.ALTERNATE_CURRENT) {
+                 level.getWireHandler().onWireAdded(pos, state); // Alternate Current
++            } else if (level.paperConfig().misc.redstoneImplementation == io.papermc.paper.configuration.WorldConfiguration.Misc.RedstoneImplementation.BEDROCK) {
++                ((net.minecraft.server.level.ServerLevel) level).getBedrockRedstoneEngine().onWireAdded(this, pos, state); // Grimstone - Bedrock redstone
+             } else {
+                 this.updateSurroundingRedstone(level, pos, state, null, true); // Vanilla/Eigencraft
+             }
+             // Paper end - optimize redstone
+ 
+             for (Direction direction : Direction.Plane.VERTICAL) {
+@@ -379,10 +382,13 @@ public class RedStoneWireBlock extends Block {
+             // Paper start - optimize redstone - replace call to updatePowerStrength
+             if (level.paperConfig().misc.redstoneImplementation == io.papermc.paper.configuration.WorldConfiguration.Misc.RedstoneImplementation.ALTERNATE_CURRENT) {
+                 level.getWireHandler().onWireRemoved(pos, state); // Alternate Current
++            } else if (level.paperConfig().misc.redstoneImplementation == io.papermc.paper.configuration.WorldConfiguration.Misc.RedstoneImplementation.BEDROCK) {
++                ((net.minecraft.server.level.ServerLevel) level).getBedrockRedstoneEngine().onWireRemoved(pos, state); // Grimstone - Bedrock redstone
+             } else {
+                 this.updateSurroundingRedstone(level, pos, state, null, false); // Vanilla/Eigencraft
+             }
+             // Paper end - optimize redstone
+             this.updateNeighborsOfNeighboringWires(level, pos);
+@@ -410,13 +416,17 @@ public class RedStoneWireBlock extends Block {
+         final BlockState state, final Level level, final BlockPos pos, final Block block, final @Nullable Orientation orientation, final boolean movedByPiston
+     ) {
+         if (!level.isClientSide()) {
+-            // Paper start - optimize redstone (Alternate Current)
+-            // Alternate Current handles breaking of redstone wires in the WireHandler.
++            // Paper/Grimstone start - optimized redstone implementations
+             if (level.paperConfig().misc.redstoneImplementation == io.papermc.paper.configuration.WorldConfiguration.Misc.RedstoneImplementation.ALTERNATE_CURRENT) {
+                 level.getWireHandler().onWireUpdated(pos, state, orientation);
+-            } else
+-                // Paper end - optimize redstone (Alternate Current)
+-            if (block != this || !useExperimentalEvaluator(level)) {
++            } else if (level.paperConfig().misc.redstoneImplementation == io.papermc.paper.configuration.WorldConfiguration.Misc.RedstoneImplementation.BEDROCK) {
++                ((net.minecraft.server.level.ServerLevel) level).getBedrockRedstoneEngine().onWireUpdated(this, pos, state, orientation);
++            } else if (block != this || !useExperimentalEvaluator(level)) {
+                 if (state.canSurvive(level, pos)) {
+                     this.updateSurroundingRedstone(level, pos, state, orientation, false); // Paper - Optimize redstone (Eigencraft)
+                 } else {
+                     dropResources(state, level, pos);
+                     level.removeBlock(pos, false);
+                 }
+             }
++            // Paper/Grimstone end - optimized redstone implementations
+         }
+     }
